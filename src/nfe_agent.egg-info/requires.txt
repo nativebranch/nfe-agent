@@ -1,0 +1,4 @@
+
+[dev]
+pytest>=8
+websocket-client>=1.8

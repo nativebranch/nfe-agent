@@ -20,13 +20,21 @@ Built for the All Things Agentic Hackathon (Google/Devpost, deadline 2026-08-31 
 ```
 specs.md          # full build spec
 prompts/          # AI prompts used (attribution)
-src/nfe_agent/    # ADK agent: tools/ (extract, ledger, pay), channels/
-tests/            # host tests + fixtures (NF-e XML, DANFE PDF, photo)
+src/nfe_agent/    # ADK agent: core/ (ledger, ptax, refkey, rules, nfe_parse),
+                  # extract.py (Gemini vision), agent.py (tools), webapp.py (FastAPI)
+web/index.html    # single-page UI (dark, PT-BR): upload NF-e, chat, ledger view
+tests/            # host tests + fixtures (NF-e XML, DANFE PNG) + injection transcripts
 docs/             # architecture diagram, threat model, demo script
 ```
 
-## Run (when implemented)
+## Run (web)
 ```
-pip install -e ".[dev]"   # google-adk + vision deps
-adk run nfe_agent         # or `python -m nfe_agent`
+.venv/bin/python -m nfe_agent.webapp   # http://127.0.0.1:8090
 ```
+
+## Status
+- Core: ledger hash-chain, PTAX (BCB, live-tested), reference keys, NF-e v4.00 parser
+  with official check-digit, fail-closed rules — 10 tests passing
+- Vision extraction: gemini-3.6/3.5-flash, validated output, tamper rejection
+- Agent: ADK, 5 tools, pt-BR, prompt-injection refusals documented
+- Web: upload -> extract -> book -> chat -> ledger export

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NF-e Agent — bookkeeping copilot</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3;
+          --muted:#8b949e; --accent:#3fb950; --warn:#d29922; --danger:#f85149; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font:15px/1.5 system-ui,sans-serif; }
+  header { padding:16px 24px; border-bottom:1px solid var(--border);
+           display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:18px; font-weight:600; }
+  header span { color:var(--muted); font-size:13px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--accent); }
+  main { display:grid; grid-template-columns: 340px 1fr; gap:16px; padding:16px 24px; }
+  @media (max-width:900px) { main { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
+              color:var(--muted); margin-bottom:10px; }
+  #drop { border:2px dashed var(--border); border-radius:10px; padding:26px 14px;
+          text-align:center; color:var(--muted); cursor:pointer; transition:.15s; }
+  #drop:hover, #drop.over { border-color:var(--accent); color:var(--text); }
+  #drop input { display:none; }
+  #status { margin-top:10px; font-size:13px; min-height:20px; }
+  #status.ok { color:var(--accent); } #status.err { color:var(--danger); }
+  #chat { display:flex; flex-direction:column; height:520px; }
+  #msgs { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:4px 2px; }
+  .msg { max-width:85%; padding:9px 12px; border-radius:10px; white-space:pre-wrap; font-size:14px; }
+  .msg.user { align-self:flex-end; background:#1f6feb; }
+  .msg.agent { align-self:flex-start; background:#21262d; border:1px solid var(--border); }
+  .msg .meta { font-size:11px; color:var(--muted); margin-bottom:3px; }
+  #inputrow { display:flex; gap:8px; margin-top:10px; }
+  #input { flex:1; background:#0d1117; border:1px solid var(--border); color:var(--text);
+           border-radius:8px; padding:9px 12px; outline:none; }
+  #input:focus { border-color:var(--accent); }
+  button { background:var(--accent); color:#0d1117; border:0; border-radius:8px;
+           padding:9px 16px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:500; }
+  td.mono { font-family:ui-monospace,monospace; font-size:11px; color:var(--muted); }
+  .pill { font-size:11px; padding:2px 8px; border-radius:20px; }
+  .pill.ok { background:#1f6feb22; color:var(--accent); border:1px solid var(--accent); }
+  .pill.wait { background:#d2992222; color:var(--warn); border:1px solid var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <div class="dot"></div>
+  <h1>NF-e Agent</h1>
+  <span>bookkeeping copilot · Brasil</span>
+</header>
+<main>
+  <section>
+    <div class="panel">
+      <h2>Entrada de nota</h2>
+      <div id="drop">Arraste o NF-e (XML, PDF ou foto)<br>ou clique para selecionar</div>
+      <input type="file" id="file" accept=".xml,.pdf,.png,.jpg,.jpeg,.webp">
+      <div id="status"></div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Livro razão</h2>
+      <div style="max-height:300px;overflow:auto" id="ledger">
+        <table><thead><tr><th>#</th><th>Data</th><th>Total R$</th><th>Status</th></tr></thead>
+        <tbody id="ledgerBody"><tr><td colspan="4" style="color:var(--muted)">vazio — envie uma nota</td></tr></tbody></table>
+      </div>
+    </div>
+  </section>
+  <section class="panel" id="chat">
+    <h2>Agente</h2>
+    <div id="msgs"></div>
+    <div id="inputrow">
+      <input id="input" placeholder="ex.: lance a nota e me diga o total em reais…">
+      <button id="send" disabled>Enviar</button>
+    </div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const drop=$('#drop'), file=$('#file'), status=$('#status');
+const msgs=$('#msgs'), input=$('#input'), send=$('#send');
+function addMsg(role, text){
+  const d=document.createElement('div');
+  d.className='msg '+role;
+  d.innerHTML=`<div class="meta">${role==='user'?'você':'agente'}</div>`+text.replace(/</g,'&lt;');
+  msgs.appendChild(d); msgs.scrollTop=msgs.scrollHeight;
+}
+function setStatus(t,cls){ status.textContent=t; status.className=cls||''; }
+drop.onclick=()=>file.click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over');};
+drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over'); if(e.dataTransfer.files[0]) sendFile(e.dataTransfer.files[0]);};
+file.onchange=()=>{ if(file.files[0]) sendFile(file.files[0]); };
+async function sendFile(f){
+  setStatus(`extraindo ${f.name}…`);
+  const fd=new FormData(); fd.append('file',f);
+  const r=await fetch('/api/extract',{method:'POST',body:fd});
+  const j=await r.json();
+  if(j.error){ setStatus(j.error,'err'); return; }
+  setStatus(`✓ ${j.invoice.access_key.slice(-6)} · R$ ${j.invoice.total.toFixed(2)}`, 'ok');
+  addMsg('agent', `Nota ${j.invoice.number} (${j.invoice.issued_at.slice(0,10)}) extraída e lançada.\nTotal: R$ ${j.invoice.total.toFixed(2)} · Entrada ${j.booked.entry_id}`);
+  loadLedger();
+}
+async function loadLedger(){
+  const j=await (await fetch('/api/ledger')).json();
+  const csv=j.csv.split('\n').slice(1).filter(Boolean);
+  $('#ledgerBody').innerHTML = csv.length
+    ? csv.map(r=>{const c=r.split(',');return `<tr><td>${c[0]}</td><td>${c[2]}</td><td>${c[3]}</td><td><span class="pill ${c[6]==='booked'?'ok':'wait'}">${c[6]}</span></td></tr>`;}).join('')
+    : '<tr><td colspan="4" style="color:var(--muted)">vazio — envie uma nota</td></tr>';
+}
+input.addEventListener('input',()=>send.disabled=!input.value.trim());
+send.onclick=async()=>{
+  const m=input.value.trim(); if(!m) return;
+  addMsg('user',m); input.value=''; send.disabled=true;
+  const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
+  const j=await r.json();
+  addMsg('agent', j.reply||'(sem resposta)');
+  loadLedger();
+};
+addMsg('agent','Oi! Sou seu copiloto de escrituração. Arraste uma NF-e (XML/PDF/foto) ou me peça algo — ex.: "extrai a nota e lança no ledger".');
+</script>
+</body>
+</html>
