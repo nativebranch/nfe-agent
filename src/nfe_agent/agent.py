@@ -20,6 +20,7 @@ from .llm import default_model
 # --- shared in-memory state (demo scope; persistence added in build step) ---
 _ledger = Ledger()
 _booked_keys: set[str] = set()
+_invoices: dict[str, dict] = {}
 OPERATOR_CAP_USDC = 500.0
 
 
@@ -64,28 +65,39 @@ def book_invoice(invoice: dict) -> dict:
                               value_brl=invoice["total"],
                               value_usdc=value_usdc, ptax_rate=ptax_rate,
                               status="pending_valuation" if (value_usdc is not None and ptax_rate is None) else "booked"))
+    _invoices[key] = dict(invoice)
+    _booked_entries[key] = entry.entry_id
     return {"entry_id": entry.entry_id, "hash": entry.hash, "status": entry.status,
             "ptax_rate": ptax_rate, "chain_ok": _ledger.verify_chain()}
 
 
-def request_payment(invoice: dict) -> dict:
-    """Create a payment request for a booked USDC invoice (reference-key bound).
+_booked_entries: dict[str, str] = {}
+
+
+def list_booked() -> list[dict]:
+    """List booked invoices (access key, entry, total, status) so payment requests
+    can reference an existing entry by its access key."""
+    return [{"access_key": k, "total_brl": v.get("total"), "currency": str(v.get("currency", "BRL")).upper(),
+             "entry": _booked_entries.get(k)} for k, v in _invoices.items()]
+
+
+def request_payment(access_key: str, amount_usdc: float) -> dict:
+    """Create a payment request for a booked invoice (reference-key bound).
     Amount is capped by the operator config; proposals only, no signing.
     Returns a refusal dict (never raises) when the request is not allowed."""
-    from .core.refkey import is_valid_reference_key
-    currency = str(invoice.get("currency", "BRL")).upper()
-    amount = float(invoice.get("amount_usdc", invoice.get("total", 0)))
-    if currency != "USDC" and not invoice.get("amount_usdc"):
-        return {"error": "invoice is in BRL — specify amount_usdc for a USDC payment request",
+    invoice = _invoices.get(access_key)
+    if invoice is None:
+        return {"error": f"no booked invoice for access key {access_key} — run list_booked() first",
                 "refused": True}
+    amount = float(amount_usdc)
     if amount <= 0:
         return {"error": "amount must be positive", "refused": True}
     if amount > OPERATOR_CAP_USDC:
         return {"error": f"amount {amount} USDC exceeds operator cap {OPERATOR_CAP_USDC} — "
                          "needs human approval", "refused": True}
-    key = new_reference_key(invoice["access_key"])
+    key = new_reference_key(access_key)
     return {"payment_link": f"solana:{key}?amount={amount}&asset=USDC",
-            "reference_key": key, "amount_usdc": amount,
+            "reference_key": key, "amount_usdc": amount, "invoice": access_key,
             "note": "proposal only — human signs out-of-band"}
 
 
@@ -112,12 +124,24 @@ HARD RULES:
 Respond in Portuguese (pt-BR) unless the user writes in English."""
 
 
+def _on_model_error(request, exc):
+    """ADK hook: on model API failure (429/503), retry the same request on the fallback model."""
+    try:
+        from .llm import fallback_model
+        new_req = request.model_copy(deep=True)
+        new_req.model = fallback_model()
+        return new_req
+    except Exception:
+        return None
+
+
 def build_agent() -> LlmAgent:
     return LlmAgent(
         name="nfe_agent",
         model=default_model(),
         instruction=AGENT_INSTRUCTION,
-        tools=[extract_invoice, book_invoice, request_payment, verify_payment, export_ledger],
+        tools=[extract_invoice, book_invoice, list_booked, request_payment, verify_payment, export_ledger],
+        on_model_error_callback=_on_model_error,
     )
 
 

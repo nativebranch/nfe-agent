@@ -29,7 +29,7 @@
 - Rules: no deletion/editing after book; export is byte-identical on re-run.
 
 ## spec/tool-pay.md
-- Name: request_payment(invoice, wallet) -> PaymentLink; verify_payment(ref) -> Status
+- Name: request_payment(access_key, amount_usdc) -> PaymentLink; verify_payment(ref) -> Status; list_booked() -> entries
 - Payment link: Solana Pay-style URL with UNIQUE reference key (uuid, not memo) binding the
   invoice; amount + asset (USDC) explicit; expiry 24h.
 - Verify: on-chain lookup of reference key -> PAID/UNDERPAID/WRONG_ASSET/EXPIRED (never "paid"
