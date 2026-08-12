@@ -36,9 +36,11 @@ def extract_invoice(path: str) -> dict:
 
 def book_invoice(invoice: dict) -> dict:
     """Book an extracted invoice into the ledger (append-only hash chain).
+    USDC invoices are valued at the official BCB PTAX close for their date.
     Refuses duplicates and inconsistent documents."""
     from .core.rules import RuleError, check_duplicate, validate_totals
     from .core.rules import Invoice as _Inv
+    from .core.ptax import PTAXClient, PTAXError
     key = invoice["access_key"]
     check_duplicate(key, _booked_keys)
     inv = _Inv(access_key=key, issuer_cnpj=invoice.get("issuer_cnpj", ""),
@@ -47,21 +49,43 @@ def book_invoice(invoice: dict) -> dict:
                items=invoice.get("items", []), total=invoice["total"])
     validate_totals(inv)
     _booked_keys.add(key)
+    currency = str(invoice.get("currency", "BRL")).upper()
+    value_usdc = float(invoice["total"]) if currency == "USDC" else None
+    ptax_rate = None
+    if value_usdc is not None:
+        d = invoice.get("issued_at", "")[:10]
+        if d:
+            try:
+                ptax_rate = PTAXClient().quote("USD", d[8:10] + "-" + d[5:7] + "-" + d[0:4]).mid
+            except PTAXError:
+                ptax_rate = None  # pending valuation; never invented
     entry = _ledger.add(Entry(entry_id=f"E{len(_ledger.entries)+1:04d}", access_key=key,
                               date=invoice.get("issued_at", "")[:10],
-                              value_brl=invoice["total"]))
+                              value_brl=invoice["total"],
+                              value_usdc=value_usdc, ptax_rate=ptax_rate,
+                              status="pending_valuation" if (value_usdc is not None and ptax_rate is None) else "booked"))
     return {"entry_id": entry.entry_id, "hash": entry.hash, "status": entry.status,
-            "chain_ok": _ledger.verify_chain()}
+            "ptax_rate": ptax_rate, "chain_ok": _ledger.verify_chain()}
 
 
 def request_payment(invoice: dict) -> dict:
     """Create a payment request for a booked USDC invoice (reference-key bound).
-    Amount is capped by the operator config; proposals only, no signing."""
+    Amount is capped by the operator config; proposals only, no signing.
+    Returns a refusal dict (never raises) when the request is not allowed."""
     from .core.refkey import is_valid_reference_key
-    check_amount(float(invoice.get("amount_usdc", invoice.get("total", 0))), OPERATOR_CAP_USDC)
+    currency = str(invoice.get("currency", "BRL")).upper()
+    amount = float(invoice.get("amount_usdc", invoice.get("total", 0)))
+    if currency != "USDC" and not invoice.get("amount_usdc"):
+        return {"error": "invoice is in BRL — specify amount_usdc for a USDC payment request",
+                "refused": True}
+    if amount <= 0:
+        return {"error": "amount must be positive", "refused": True}
+    if amount > OPERATOR_CAP_USDC:
+        return {"error": f"amount {amount} USDC exceeds operator cap {OPERATOR_CAP_USDC} — "
+                         "needs human approval", "refused": True}
     key = new_reference_key(invoice["access_key"])
-    return {"payment_link": f"solana:{key}?amount={invoice.get('total')}&asset=USDC",
-            "reference_key": key, "amount_usdc": invoice.get("total"),
+    return {"payment_link": f"solana:{key}?amount={amount}&asset=USDC",
+            "reference_key": key, "amount_usdc": amount,
             "note": "proposal only — human signs out-of-band"}
 
 

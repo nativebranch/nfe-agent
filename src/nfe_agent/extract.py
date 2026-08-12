@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .core.nfe_parse import parse_nfe_xml
 from .core.rules import Invoice, RuleError, validate_access_key, validate_totals
-from .llm import default_model, get_client
+from .llm import default_model, generate_with_fallback, get_client
 
 EXTRACT_PROMPT = """You extract structured data from Brazilian NF-e invoices (DANFE).
 Return ONLY a JSON object, no markdown, with exactly these fields:
@@ -30,8 +30,7 @@ def extract_invoice_from_document(path: str | Path) -> Invoice:
         raise RuleError(f"file not found: {p}")
     client = get_client()
     import google.genai.types as types
-    resp = client.models.generate_content(
-        model=default_model(),
+    resp = generate_with_fallback(
         contents=[
             types.Part.from_bytes(data=p.read_bytes(), mime_type=_mime(p)),
             EXTRACT_PROMPT,
