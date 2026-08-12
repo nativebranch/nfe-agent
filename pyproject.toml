@@ -1,0 +1,11 @@
+[project]
+name = "nfe-agent"
+version = "0.1.0"
+description = "Bookkeeping copilot for Brazilian freelancers (ATA 2026 entry)"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "websocket-client>=1.8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
